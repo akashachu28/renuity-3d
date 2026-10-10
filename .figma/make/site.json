@@ -1,0 +1,10 @@
+{
+  "description": "Explore and customize 3D spaces by dragging and dropping assets into a dynamic viewing interface, perfect for designers and developers.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
