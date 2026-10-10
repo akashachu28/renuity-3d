@@ -1960,14 +1960,14 @@ function App() {
             })}
           </div>
 
-          <div className="sidebar-tip">
+          {/* <div className="sidebar-tip">
             <MousePointer2 size={17} />
             <p>
               <strong>Quick add</strong>
               Select any item to place it. Tubs and floor fixtures move freely; rods, grab bars and
               wall fixtures snap to the nearest wall.
             </p>
-          </div>
+          </div> */}
         </aside>
 
         <section className="viewer">
