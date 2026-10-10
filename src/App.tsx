@@ -1696,7 +1696,6 @@ function RoomCanvas({ items, selectedUid, onSelect, onMove, onRotate, onReady, w
 }
 
 function App() {
-  const [category, setCategory] = useState<Category>("Bathtubs");
   const [wallTile, setWallTile] = useState<string | null>(null);
   const [placedItems, setPlacedItems] = useState<PlacedAsset[]>([]);
   const [selectedUid, setSelectedUid] = useState<number | null>(null);
@@ -1717,32 +1716,45 @@ function App() {
   };
 
   const addAsset = (asset: AssetDefinition) => {
-    uidRef.current += 1;
-    const uid = uidRef.current;
     setPlacedItems((current) => {
-      const copies = current.filter((item) => item.type === asset.id).length;
+      // Check if this asset is already placed
+      const existingItem = current.find((item) => item.type === asset.id);
+      
+      if (existingItem) {
+        // If clicking the same asset again, remove it (deselect)
+        setSelectedUid(null);
+        showToast(`${asset.name} removed`, 1400);
+        return current.filter((item) => item.type !== asset.id);
+      }
+      
+      // Remove any other items from the same category (mutually exclusive)
+      const filteredItems = current.filter((item) => {
+        const itemAsset = assetById[item.type];
+        return itemAsset.category !== asset.category;
+      });
+      
+      // Add the new item
+      uidRef.current += 1;
+      const uid = uidRef.current;
       let [x, z] = asset.home;
       let rotation = asset.homeRotation ?? 0;
 
       if (asset.mount === "wall") {
-        // Snap to the nearest wall, then slide further copies along that wall.
         const hw = asset.halfWidth ?? 0.4;
-        const first = snapToWall(x, z, hw);
-        const shift = copies * 0.8;
-        const snapped = first.rotation === 0 ? snapToWall(x + shift, z, hw) : snapToWall(x, z + shift, hw);
+        const snapped = snapToWall(x, z, hw);
         x = snapped.x;
         z = snapped.z;
         rotation = snapped.rotation;
       } else {
-        const next = clampFloor(x + copies * 0.7, z + copies * 0.7);
+        const next = clampFloor(x, z);
         x = next.x;
         z = next.z;
       }
 
-      return [...current, { uid, type: asset.id, x, z, rotation, y: 0 }];
+      setSelectedUid(uid);
+      showToast(`${asset.name} added to the bathroom`, 1800);
+      return [...filteredItems, { uid, type: asset.id, x, z, rotation, y: 0 }];
     });
-    setSelectedUid(uid);
-    showToast(`${asset.name} added to the bathroom`, 1800);
   };
 
   const moveItem = (uid: number, x: number, z: number, rotation?: number, y?: number) => {
@@ -1824,7 +1836,6 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [selectedUid]);
 
-  const visibleAssets = assets.filter((asset) => asset.category === category);
   const selectedItem = placedItems.find((item) => item.uid === selectedUid);
   const selectedAsset = selectedItem ? assetById[selectedItem.type] : undefined;
   const canRotate = selectedAsset?.mount === "floor";
@@ -1891,60 +1902,60 @@ function App() {
             </button>
           </div>
 
-          <div className="category-tabs">
-            {categories.map((item) => (
-              <button
-                type="button"
-                className={category === item ? "active" : ""}
-                onClick={() => setCategory(item)}
-                key={item}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-
-          <div className="asset-count">
-            <span>{category}</span>
-            <small>{category === "Wall tiles" ? wallTiles.length : visibleAssets.length} items</small>
-          </div>
-
-          <div className="asset-grid">
-            {category === "Wall tiles"
-              ? wallTiles.map((tile) => {
-                  const Icon = tile.icon;
-                  return (
-                    <button
-                      key={tile.id}
-                      type="button"
-                      className={`asset-card ${wallTile === tile.id ? "selected" : ""}`}
-                      onClick={() => applyWallTile(tile)}
-                    >
-                      <span className="asset-visual" style={{ background: tile.preview, color: tile.iconColor }}>
-                        <Icon size={46} strokeWidth={1.3} />
-                        <span className="add-mark">{wallTile === tile.id ? "✓" : "+"}</span>
-                      </span>
-                      <strong>{tile.name}</strong>
-                      <small>{tile.detail}</small>
-                    </button>
-                  );
-                })
-              : visibleAssets.map((asset) => {
-              const Icon = asset.icon;
+          <div className="categories-list">
+            {categories.map((cat) => {
               return (
-                <button
-                  key={asset.id}
-                  type="button"
-                  className={`asset-card ${selectedItem?.type === asset.id ? "selected" : ""}`}
-                  onClick={() => addAsset(asset)}
-                >
-                  <span className={`asset-visual ${asset.tone}`}>
-                    <Icon size={46} strokeWidth={1.3} />
-                    <span className="add-mark">+</span>
-                  </span>
-                  <strong>{asset.name}</strong>
-                  <small>{asset.detail}</small>
-                </button>
+                <div key={cat} className="category-section">
+                  <div className="category-header">
+                    <span className="category-name">{cat}</span>
+                    <small className="category-count">
+                      {cat === "Wall tiles" ? wallTiles.length : assets.filter((a) => a.category === cat).length} items
+                    </small>
+                  </div>
+
+                  <div className="asset-grid">
+                    {cat === "Wall tiles"
+                      ? wallTiles.map((tile) => {
+                          const Icon = tile.icon;
+                          return (
+                            <button
+                              key={tile.id}
+                              type="button"
+                              className={`asset-card ${wallTile === tile.id ? "selected" : ""}`}
+                              onClick={() => applyWallTile(tile)}
+                            >
+                              <span className="asset-visual" style={{ background: tile.preview, color: tile.iconColor }}>
+                                <Icon size={46} strokeWidth={1.3} />
+                                <span className="add-mark">{wallTile === tile.id ? "✓" : "+"}</span>
+                              </span>
+                              <strong>{tile.name}</strong>
+                              <small>{tile.detail}</small>
+                            </button>
+                          );
+                        })
+                      : assets
+                          .filter((a) => a.category === cat)
+                          .map((asset) => {
+                            const Icon = asset.icon;
+                            const isPlaced = placedItems.some((item) => item.type === asset.id);
+                            return (
+                              <button
+                                key={asset.id}
+                                type="button"
+                                className={`asset-card ${isPlaced ? "selected" : ""}`}
+                                onClick={() => addAsset(asset)}
+                              >
+                                <span className={`asset-visual ${asset.tone}`}>
+                                  <Icon size={46} strokeWidth={1.3} />
+                                  <span className="add-mark">{isPlaced ? "✓" : "+"}</span>
+                                </span>
+                                <strong>{asset.name}</strong>
+                                <small>{asset.detail}</small>
+                              </button>
+                            );
+                          })}
+                  </div>
+                </div>
               );
             })}
           </div>
