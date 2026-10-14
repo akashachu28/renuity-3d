@@ -16,7 +16,9 @@ export default defineConfig(({ mode }) => {
     build: {
       sourcemap: emitSourcemaps ? 'inline' : false,
       minify: !emitSourcemaps,
+      assetsInlineLimit: 0, // Don't inline assets, always emit them as files
     },
+    assetsInclude: ['**/*.jpg', '**/*.jpeg', '**/*.png', '**/*.webp'],
     plugins: [
 react(),
       tailwindcss(),
