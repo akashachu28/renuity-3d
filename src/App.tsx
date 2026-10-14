@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { buildBathroomDecor } from "./bathroom-design/bathroomDecor";
 import {
   Archive,
   Armchair,
@@ -35,6 +36,8 @@ import {
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { buildBathroomWalls, buildFloor, createFloorTile, createMarble } from "./wet-area-elements/bathroomWalls";
+import { createAsset } from "./wet-area-elements/bathroomComponents";
 
 // Wall tile images. Put wall1.jpg, wall2.jpg and wall3.jpg in src/assets/.
 // If TypeScript complains about .jpg imports, add `declare module "*.jpg";` to a .d.ts file.
@@ -65,7 +68,14 @@ type AssetId =
   | "nicheBox"
   | "cornerShelf";
 
-type Category = "Bathtubs" | "Fixtures" | "Rods" | "Grab bars" | "Accessories" | "Shower doors" | "Wall tiles";
+type Category =
+  | "Bathtubs"
+  | "Fixtures"
+  | "Rods"
+  | "Grab bars"
+  | "Accessories"
+  | "Shower doors"
+  | "Wall tiles";
 type Mount = "floor" | "wall" | "corner";
 
 type PlacedAsset = {
@@ -89,6 +99,8 @@ type AssetDefinition = {
   category: Category;
   /** floor items can be dragged anywhere; wall items snap to the nearest wall */
   mount: Mount;
+  /** Locked items can be selected and recoloured but not moved or rotated. */
+  locked?: boolean;
   /** where the first copy appears (wall items snap to the closest wall) */
   home: [number, number];
   homeRotation?: number;
@@ -104,7 +116,15 @@ const TUB_LENGTH = 4.8;
 const TUB_DEPTH = 2.8;
 const TUB_HEIGHT = 1.1;
 
-const categories: Category[] = ["Bathtubs", "Fixtures", "Rods", "Grab bars", "Accessories", "Shower doors", "Wall tiles"];
+const categories: Category[] = [
+  "Bathtubs",
+  "Fixtures",
+  "Rods",
+  "Grab bars",
+  "Accessories",
+  "Shower doors",
+  "Wall tiles",
+];
 
 const assets: AssetDefinition[] = [
   {
@@ -115,17 +135,19 @@ const assets: AssetDefinition[] = [
     tone: "sand",
     category: "Bathtubs",
     mount: "floor",
-    home: [0, -5 - TUB_DEPTH + 0.01 + (TUB_DEPTH - 0.02) / 2],
+    locked: true,
+    home: [0, -6.55],
   },
   {
     id: "freeTub",
     name: "Freestanding tub",
-    detail: "310 × 110 cm",
+    detail: "Freestanding · wall to wall",
     icon: Bath,
     tone: "clay",
     category: "Bathtubs",
     mount: "floor",
-    home: [-1.6, -0.9],
+    locked: true,
+    home: [0, -6.55],
   },
   {
     id: "rainShower",
@@ -191,6 +213,7 @@ const assets: AssetDefinition[] = [
     tone: "sand",
     category: "Shower doors",
     mount: "floor",
+    locked: true,
     home: [0, -5.12],
   },
   {
@@ -201,6 +224,7 @@ const assets: AssetDefinition[] = [
     tone: "olive",
     category: "Shower doors",
     mount: "floor",
+    locked: true,
     home: [0, -5.12],
   },
   {
@@ -238,7 +262,9 @@ const assets: AssetDefinition[] = [
   },
 ];
 
-const assetById = Object.fromEntries(assets.map((asset) => [asset.id, asset])) as Record<AssetId, AssetDefinition>;
+const assetById = Object.fromEntries(
+  assets.map((asset) => [asset.id, asset]),
+) as Record<AssetId, AssetDefinition>;
 
 const palette = {
   cream: 0xf3f0ea,
@@ -254,28 +280,40 @@ const palette = {
   sageDark: 0x87927b,
 };
 
-// Room is 12 × 10 units centred on the origin. The back wall (z = -5) has a recessed alcove
-// (x from -3 to 3, 0.9 deep) like the reference; side walls are at x = ±6.
-const ROOM_LIMIT_X = 5.3;
-const ROOM_LIMIT_Z = 4.3;
+// ---------------------------------------------------------------------------------------------
+// Room dimensions
+// ---------------------------------------------------------------------------------------------
+// A compact cut-away room around the bath area (the alcove keeps its size; only the room shrinks).
+// The back wall (z = -5) has the recessed alcove; the side walls sit at x = ±ROOM_HALF_WIDTH.
+//
+//   ROOM_HALF_WIDTH  distance from the centre line to each side wall (was 6). The wall strip beside
+//                    the alcove is ROOM_HALF_WIDTH - ALCOVE_HALF_WIDTH wide.
+//   ROOM_FRONT_Z     where the side walls and floor end at the front (was 1).
+const ROOM_HALF_WIDTH = 4.4 ;
+const ROOM_FRONT_Z = 1;
+const ROOM_LIMIT_X = ROOM_HALF_WIDTH - 0.7; // how far floor items can be dragged sideways
+const ROOM_MIN_Z = -4.3; // back limit for floor items outside the alcove
+const ROOM_MAX_Z = ROOM_FRONT_Z - 0.4; // front limit for floor items
 const ALCOVE_HALF_WIDTH = TUB_LENGTH / 2;
 const ALCOVE_DEPTH = TUB_DEPTH;
 const ALCOVE_HEIGHT = 4.7;
 const BACK_WALL_Z = -4.995;
-const ALCOVE_BACK_Z = -5 - ALCOVE_DEPTH + 0.01; // -7.39
-const LEFT_WALL_X = -5.995;
-const RIGHT_WALL_X = 5.995;
+const ALCOVE_BACK_Z = -5 - ALCOVE_DEPTH + 0.01; // -7.79
+const LEFT_WALL_X = -ROOM_HALF_WIDTH + 0.005;
+const RIGHT_WALL_X = ROOM_HALF_WIDTH - 0.005;
 
 const CAMERA_START = new THREE.Vector3(0, 3.2, 5.5); // Zoomed in closer, front-facing
 const TARGET_START = new THREE.Vector3(0, 2.2, -5.5); // Centered on bath area
 
-const clamp = (value: number, limit: number) => Math.max(-limit, Math.min(limit, value));
+const clamp = (value: number, limit: number) =>
+  Math.max(-limit, Math.min(limit, value));
 
 /** Keep floor items inside the room; allow big pieces (tubs) to slide into the alcove. */
 function clampFloor(x: number, z: number) {
   const cx = clamp(x, ROOM_LIMIT_X);
-  const minZ = Math.abs(cx) <= ALCOVE_HALF_WIDTH - 1.2 ? ALCOVE_BACK_Z + 0.65 : -ROOM_LIMIT_Z;
-  return { x: cx, z: Math.max(minZ, Math.min(ROOM_LIMIT_Z, z)) };
+  const minZ =
+    Math.abs(cx) <= ALCOVE_HALF_WIDTH - 0.3 ? ALCOVE_BACK_Z + 1.2 : ROOM_MIN_Z;
+  return { x: cx, z: Math.max(minZ, Math.min(ROOM_MAX_Z, z)) };
 }
 
 const clampRange = (value: number, lo: number, hi: number) =>
@@ -292,23 +330,51 @@ function snapToWall(x: number, z: number, halfWidth = 0.4) {
   const sideLo = ALCOVE_BACK_Z + halfWidth + 0.05;
   const sideHi = BACK_WALL_Z - 0.1 - halfWidth;
   const stripLo = H + 0.1 + halfWidth;
-  const stripHi = ROOM_LIMIT_X + 0.6 - halfWidth;
-  // Side walls only extend 6 units centered at z = -2
-  const sideWallLo = -5 + halfWidth;
-  const sideWallHi = 1 - halfWidth;
+  const stripHi = ROOM_HALF_WIDTH - 0.1 - halfWidth;
+  // Side walls run from the back wall to the front of the room.
+  const sideWallLo = BACK_WALL_Z + 0.1 + halfWidth;
+  const sideWallHi = ROOM_FRONT_Z - 0.1 - halfWidth;
 
   const candidates = [
-    { x: clampRange(x, -inner, inner), z: ALCOVE_BACK_Z, rotation: 0, alcove: true },
-    { x: -H + 0.005, z: clampRange(z, sideLo, sideHi), rotation: Math.PI / 2, alcove: true },
-    { x: H - 0.005, z: clampRange(z, sideLo, sideHi), rotation: -Math.PI / 2, alcove: true },
     {
-      x: x < 0 ? -clampRange(-x, stripLo, stripHi) : clampRange(x, stripLo, stripHi),
+      x: clampRange(x, -inner, inner),
+      z: ALCOVE_BACK_Z,
+      rotation: 0,
+      alcove: true,
+    },
+    {
+      x: -H + 0.005,
+      z: clampRange(z, sideLo, sideHi),
+      rotation: Math.PI / 2,
+      alcove: true,
+    },
+    {
+      x: H - 0.005,
+      z: clampRange(z, sideLo, sideHi),
+      rotation: -Math.PI / 2,
+      alcove: true,
+    },
+    {
+      x:
+        x < 0
+          ? -clampRange(-x, stripLo, stripHi)
+          : clampRange(x, stripLo, stripHi),
       z: BACK_WALL_Z,
       rotation: 0,
       alcove: false,
     },
-    { x: LEFT_WALL_X, z: clampRange(z, sideWallLo, sideWallHi), rotation: Math.PI / 2, alcove: false },
-    { x: RIGHT_WALL_X, z: clampRange(z, sideWallLo, sideWallHi), rotation: -Math.PI / 2, alcove: false },
+    {
+      x: LEFT_WALL_X,
+      z: clampRange(z, sideWallLo, sideWallHi),
+      rotation: Math.PI / 2,
+      alcove: false,
+    },
+    {
+      x: RIGHT_WALL_X,
+      z: clampRange(z, sideWallLo, sideWallHi),
+      rotation: -Math.PI / 2,
+      alcove: false,
+    },
   ];
 
   let best = candidates[0];
@@ -401,67 +467,6 @@ function createGrasscloth() {
       ctx.fillStyle = `rgba(120,95,70,${0.012 + rand() * 0.02})`;
       ctx.fillRect(rand() * w, 0, 2 + rand() * 9, h);
     }
-  });
-}
-
-/** Pale veined stone panel for the back of the alcove. */
-function createMarble() {
-  return paintTexture(1024, 832, (ctx, w, h) => {
-    const rand = rng(7);
-    ctx.fillStyle = "#ebe0c9";
-    ctx.fillRect(0, 0, w, h);
-    for (let i = 0; i < 70; i += 1) {
-      const x = rand() * w;
-      const y = rand() * h;
-      const r = 90 + rand() * 240;
-      const gradient = ctx.createRadialGradient(x, y, 0, x, y, r);
-      gradient.addColorStop(0, rand() < 0.5 ? "rgba(205,192,172,0.14)" : "rgba(255,255,255,0.05)");
-      gradient.addColorStop(1, "rgba(255,255,255,0)");
-      ctx.fillStyle = gradient;
-      ctx.fillRect(x - r, y - r, r * 2, r * 2);
-    }
-    ctx.lineCap = "round";
-    for (let i = 0; i < 16; i += 1) {
-      let x = rand() * w;
-      let y = rand() * h * 0.3;
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      const steps = 20 + Math.floor(rand() * 25);
-      for (let s = 0; s < steps; s += 1) {
-        x += (rand() - 0.5) * 40;
-        y += 10 + rand() * 28;
-        ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = `rgba(150,138,122,${0.12 + rand() * 0.2})`;
-      ctx.lineWidth = 0.6 + rand() * 1.6;
-      ctx.stroke();
-    }
-    for (let i = 0; i < 500; i += 1) {
-      const x = rand() * w;
-      const y = rand() * h;
-      ctx.strokeStyle = rand() < 0.5 ? "rgba(255,255,255,0.18)" : "rgba(160,148,132,0.08)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + (rand() - 0.5) * 4, y + 6 + rand() * 30);
-      ctx.stroke();
-    }
-  });
-}
-
-/** Large pale floor tile with fine grout lines. */
-function createFloorTile() {
-  return paintTexture(256, 256, (ctx, w, h) => {
-    const rand = rng(11);
-    ctx.fillStyle = "#ddd7cc";
-    ctx.fillRect(0, 0, w, h);
-    for (let i = 0; i < 1800; i += 1) {
-      ctx.fillStyle = rand() < 0.5 ? "rgba(255,255,255,0.12)" : "rgba(150,138,120,0.07)";
-      ctx.fillRect(rand() * w, rand() * h, 2, 2);
-    }
-    ctx.strokeStyle = "#c6bfb2";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(0, 0, w, h);
   });
 }
 
@@ -628,7 +633,11 @@ function material(color: number, roughness = 0.82, metalness = 0.04) {
 }
 
 function metalMaterial(color: number) {
-  return new THREE.MeshStandardMaterial({ color, roughness: 0.28, metalness: 0.85 });
+  return new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.28,
+    metalness: 0.85,
+  });
 }
 
 function box(
@@ -682,7 +691,10 @@ function tube(
   z: number,
   color: number = palette.chrome,
 ) {
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 24), metalMaterial(color));
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius, radius, length, 24),
+    metalMaterial(color),
+  );
   if (axis === "x") mesh.rotation.z = Math.PI / 2;
   if (axis === "z") mesh.rotation.x = Math.PI / 2;
   mesh.position.set(x, y, z);
@@ -692,8 +704,17 @@ function tube(
   return mesh;
 }
 
-function ball(radius: number, x: number, y: number, z: number, color: number = palette.chrome) {
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 20, 14), metalMaterial(color));
+function ball(
+  radius: number,
+  x: number,
+  y: number,
+  z: number,
+  color: number = palette.chrome,
+) {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(radius, 20, 14),
+    metalMaterial(color),
+  );
   mesh.position.set(x, y, z);
   mesh.castShadow = true;
   mesh.userData.finish = color === palette.chrome;
@@ -701,12 +722,24 @@ function ball(radius: number, x: number, y: number, z: number, color: number = p
 }
 
 /** Round wall plate; wall items have their origin on the wall surface and extend toward +z. */
-function flange(x: number, y: number, radius: number, color: number = palette.chrome) {
+function flange(
+  x: number,
+  y: number,
+  radius: number,
+  color: number = palette.chrome,
+) {
   return tube(radius, 0.04, "z", x, y, 0.02, color);
 }
 
 /** Invisible box that makes thin items easy to click and drag. */
-function hitBox(width: number, height: number, depth: number, x: number, y: number, z: number) {
+function hitBox(
+  width: number,
+  height: number,
+  depth: number,
+  x: number,
+  y: number,
+  z: number,
+) {
   const mesh = new THREE.Mesh(
     new THREE.BoxGeometry(width, height, depth),
     new THREE.MeshBasicMaterial({ visible: false }),
@@ -742,7 +775,10 @@ function taperTube(
   z: number,
   color: number = palette.chrome,
 ) {
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBottom, length, 24), metalMaterial(color));
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(rTop, rBottom, length, 24),
+    metalMaterial(color),
+  );
   if (axis === "z") mesh.rotation.x = Math.PI / 2;
   mesh.position.set(x, y, z);
   mesh.castShadow = true;
@@ -792,7 +828,8 @@ function createFrostTexture() {
     ctx.fillStyle = "#eef3f3";
     ctx.fillRect(0, 0, w, h);
     for (let i = 0; i < 5000; i += 1) {
-      ctx.fillStyle = rand() < 0.5 ? "rgba(255,255,255,0.35)" : "rgba(150,170,172,0.14)";
+      ctx.fillStyle =
+        rand() < 0.5 ? "rgba(255,255,255,0.35)" : "rgba(150,170,172,0.14)";
       ctx.fillRect(rand() * w, rand() * h, 1 + rand() * 2, 1 + rand() * 2);
     }
   });
@@ -872,7 +909,10 @@ function buildShowerDoor(group: THREE.Group, frosted: boolean) {
         });
 
   const panel = (panelWidth: number, x: number, z: number) => {
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(panelWidth, height, 0.05), makeGlass());
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(panelWidth, height, 0.05),
+      makeGlass(),
+    );
     mesh.position.set(x, bottom + height / 2, z);
     mesh.userData.glass = true;
     mesh.renderOrder = 2;
@@ -917,10 +957,32 @@ function buildShowerDoor(group: THREE.Group, frosted: boolean) {
 
   // Vertical edge profiles framing each panel.
   [-2.36, -0.16].forEach((x) => {
-    add(metalBox(0.04, height, 0.07, palette.chrome, x, bottom + height / 2, 0, 0.008));
+    add(
+      metalBox(
+        0.04,
+        height,
+        0.07,
+        palette.chrome,
+        x,
+        bottom + height / 2,
+        0,
+        0.008,
+      ),
+    );
   });
   [-0.24, 2.36].forEach((x) => {
-    add(metalBox(0.04, height, 0.07, palette.chrome, x, bottom + height / 2, 0.07, 0.008));
+    add(
+      metalBox(
+        0.04,
+        height,
+        0.07,
+        palette.chrome,
+        x,
+        bottom + height / 2,
+        0.07,
+        0.008,
+      ),
+    );
   });
 
   // Wall clamps for the fixed panel.
@@ -939,312 +1001,6 @@ function buildShowerDoor(group: THREE.Group, frosted: boolean) {
   [2.3, 3.1].forEach((y) => {
     add(tube(0.015, 0.14, "z", -0.12, y, 0.12));
   });
-}
-
-function createAsset(type: AssetId) {
-  const group = new THREE.Group();
-
-  switch (type) {
-    case "alcoveTub": {
-      // Built-in tub sized to sit snugly in the alcove (slightly inset to avoid z-fighting).
-      const L = TUB_LENGTH - 0.04;
-      const D = TUB_DEPTH - 0.02;
-      const H = TUB_HEIGHT;
-      const t = 0.22;
-      const floorH = 0.3;
-      group.add(paint(box(L, H, t, palette.porcelain, 0, H / 2, D / 2 - t / 2, 0.05), "body"));
-      group.add(paint(box(L, H, t, palette.porcelain, 0, H / 2, -D / 2 + t / 2, 0.05), "body"));
-      group.add(paint(box(t, H, D - 2 * t, palette.porcelain, -L / 2 + t / 2, H / 2, 0, 0.05), "body"));
-      group.add(paint(box(t, H, D - 2 * t, palette.porcelain, L / 2 - t / 2, H / 2, 0, 0.05), "body"));
-      group.add(paint(box(L - 2 * t, floorH, D - 2 * t, palette.basin, 0, floorH / 2, 0), "basin"));
-      group.add(tube(0.09, 0.02, "y", -L / 2 + 0.9, floorH + 0.005, 0));
-      group.add(tube(0.1, 0.02, "x", -L / 2 + t + 0.01, H - 0.2, 0));
-      break;
-    }
-
-    case "freeTub": {
-      const shellMaterial = new THREE.MeshStandardMaterial({
-        color: palette.porcelain,
-        roughness: 0.35,
-        metalness: 0.04,
-        side: THREE.DoubleSide,
-      });
-      const shell = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.4, 0.74, 48, 1, true), shellMaterial);
-      shell.scale.x = 2.6;
-      shell.userData.paint = "body";
-      shell.position.y = 0.45;
-      shell.castShadow = true;
-      shell.receiveShadow = true;
-      group.add(shell);
-
-      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.6, 0.04, 14, 64), material(palette.porcelain, 0.35));
-      rim.rotation.x = Math.PI / 2;
-      rim.scale.x = 2.6;
-      rim.userData.paint = "body";
-      rim.position.y = 0.82;
-      rim.castShadow = true;
-      group.add(rim);
-
-      const basin = new THREE.Mesh(
-        new THREE.CircleGeometry(0.43, 40),
-        new THREE.MeshStandardMaterial({ color: palette.basin, roughness: 0.5, side: THREE.DoubleSide }),
-      );
-      basin.rotation.x = -Math.PI / 2;
-      basin.scale.x = 2.6;
-      basin.userData.paint = "basin";
-      basin.position.y = 0.2;
-      basin.receiveShadow = true;
-      group.add(basin);
-
-      group.add(tube(0.05, 0.01, "y", -1.15, 0.205, 0));
-      [-1.0, 1.0].forEach((x) => {
-        [-0.22, 0.22].forEach((z) => group.add(tube(0.05, 0.1, "y", x, 0.05, z)));
-      });
-      group.scale.setScalar(1.4);
-      break;
-    }
-
-    case "rainShower": {
-      // Thermostatic valve plate with two dials and a diverter.
-      group.add(metalBox(0.8, 0.44, 0.05, palette.chrome, 0, 2.5, 0.025, 0.02));
-      [-0.2, 0.2].forEach((x) => {
-        group.add(tube(0.12, 0.07, "z", x, 2.5, 0.085));
-        group.add(tube(0.08, 0.09, "z", x, 2.5, 0.1, palette.dark));
-        group.add(metalBox(0.022, 0.07, 0.012, palette.chrome, x, 2.5 + 0.045, 0.15, 0.004));
-      });
-      group.add(ball(0.045, 0, 2.5, 0.1));
-
-      // Riser with collars and a wall clamp.
-      group.add(tube(0.035, 1.58, "y", 0, 3.51, 0.07));
-      group.add(tube(0.055, 0.06, "y", 0, 2.8, 0.07));
-      group.add(flange(0, 3.5, 0.075));
-      group.add(tube(0.05, 0.07, "y", 0, 3.5, 0.07));
-
-      // Elbow, arm and a wide rain head with nozzles.
-      group.add(ball(0.06, 0, 4.3, 0.07));
-      group.add(tube(0.04, 0.9, "z", 0, 4.3, 0.52));
-      group.add(tube(0.055, 0.08, "z", 0, 4.3, 0.13));
-      group.add(ball(0.05, 0, 4.3, 0.97));
-      group.add(tube(0.035, 0.12, "y", 0, 4.24, 0.97));
-      group.add(tube(0.48, 0.03, "y", 0, 4.19, 0.97));
-      group.add(tube(0.46, 0.06, "y", 0, 4.145, 0.97));
-      group.add(tube(0.42, 0.015, "y", 0, 4.11, 0.97, palette.dark));
-      addNozzles(group, 0, 4.1, 0.97, 0.38, "down");
-
-      group.add(hitBox(1.0, 0.3, 1.0, 0, 4.15, 0.97));
-      group.add(hitBox(0.9, 0.55, 0.35, 0, 2.5, 0.12));
-      group.add(hitBox(0.25, 1.7, 0.3, 0, 3.5, 0.07));
-      group.add(hitBox(0.2, 0.2, 0.9, 0, 4.3, 0.52));
-      break;
-    }
-
-    case "handShower": {
-      // Slide rail with end caps and plate brackets.
-      group.add(tube(0.022, 1.6, "y", 0, 2.9, 0.09));
-      group.add(ball(0.03, 0, 2.1, 0.09));
-      group.add(ball(0.03, 0, 3.7, 0.09));
-      [2.25, 3.55].forEach((y) => {
-        group.add(metalBox(0.12, 0.1, 0.02, palette.chrome, 0, y, 0.01, 0.01));
-        group.add(tube(0.02, 0.08, "z", 0, y, 0.05));
-      });
-
-      // Sliding holder, contoured handle and round spray face.
-      group.add(metalBox(0.1, 0.16, 0.09, palette.chrome, 0, 3.1, 0.15, 0.02));
-      group.add(taperTube(0.05, 0.03, 0.62, "y", 0, 3.15, 0.25));
-      group.add(tube(0.056, 0.05, "y", 0, 3.12, 0.25, palette.dark));
-      group.add(ball(0.07, 0, 3.5, 0.26));
-      group.add(tube(0.17, 0.05, "z", 0, 3.62, 0.3));
-      group.add(tube(0.14, 0.012, "z", 0, 3.62, 0.33, palette.dark));
-      addNozzles(group, 0, 3.62, 0.342, 0.12, "front");
-
-      // Wall outlet with a dome cover and a looping hose.
-      group.add(flange(0, 1.6, 0.1));
-      group.add(taperTube(0.05, 0.08, 0.08, "z", 0, 1.6, 0.07));
-      group.add(ball(0.045, 0, 1.6, 0.13));
-      group.add(ball(0.04, 0, 2.85, 0.25));
-      const hose = new THREE.Mesh(
-        new THREE.TubeGeometry(
-          new THREE.CatmullRomCurve3([
-            new THREE.Vector3(0, 1.6, 0.14),
-            new THREE.Vector3(0.15, 1.5, 0.35),
-            new THREE.Vector3(0.45, 1.9, 0.45),
-            new THREE.Vector3(0.35, 2.4, 0.4),
-            new THREE.Vector3(0.1, 2.75, 0.3),
-            new THREE.Vector3(0, 2.85, 0.25),
-          ]),
-          48,
-          0.024,
-          8,
-        ),
-        metalMaterial(palette.steel),
-      );
-      hose.castShadow = true;
-      group.add(hose);
-
-      group.add(hitBox(0.9, 2.6, 0.7, 0.2, 2.45, 0.3));
-      break;
-    }
-
-    case "showerShelf": {
-      // Metal shelf on two brackets holding three bottles.
-      group.add(box(1.2, 0.05, 0.34, palette.steel, 0, 2.0, 0.17, 0.012));
-      [-0.5, 0.5].forEach((x) => {
-        group.add(box(0.04, 0.2, 0.3, palette.steel, x, 1.89, 0.15, 0.01));
-      });
-      group.add(box(1.2, 0.08, 0.03, palette.steel, 0, 2.03, 0.335, 0.01));
-      [
-        { x: -0.35, r: 0.09, h: 0.5, color: palette.sage },
-        { x: 0, r: 0.08, h: 0.4, color: 0xf1e4c3 },
-        { x: 0.35, r: 0.09, h: 0.45, color: 0xc7795c },
-      ].forEach(({ x, r, h, color }) => {
-        const bottle = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 24), material(color, 0.5));
-        bottle.position.set(x, 2.025 + h / 2, 0.16);
-        bottle.castShadow = true;
-        group.add(bottle);
-        group.add(tube(r * 0.45, 0.07, "y", x, 2.025 + h + 0.035, 0.16));
-      });
-      group.add(hitBox(1.3, 0.8, 0.45, 0, 2.3, 0.2));
-      break;
-    }
-
-    case "nicheBox": {
-      // Wall niche with two compartments (like the reference): frame, divider and back plate.
-      const Wn = 1.6;
-      const Hn = 0.7;
-      const D = 0.32;
-      const t = 0.05;
-      const Y = 2.5;
-      const part = (w: number, h: number, d: number, x: number, y: number, z: number) => {
-        const mesh = metalBox(w, h, d, palette.chrome, x, y, z, 0.006);
-        mesh.userData.shiny = true; // polished finish + environment reflections
-        group.add(mesh);
-      };
-      part(Wn, Hn, 0.03, 0, Y, 0.015); // back plate
-      part(Wn, t, D, 0, Y + Hn / 2 - t / 2, D / 2); // top
-      part(Wn, t, D, 0, Y - Hn / 2 + t / 2, D / 2); // bottom
-      part(t, Hn, D, -Wn / 2 + t / 2, Y, D / 2); // left
-      part(t, Hn, D, Wn / 2 - t / 2, Y, D / 2); // right
-      part(0.04, Hn - 2 * t, D, 0, Y, D / 2); // centre divider
-      group.add(hitBox(Wn, Hn, D + 0.05, 0, Y, D / 2));
-      break;
-    }
-
-    case "cornerShelf": {
-      // L-shaped slotted corner shelf. Origin is the inside corner; arms run along +x and +z.
-      const L = 1.1; // arm length
-      const W = 0.45; // arm depth
-      const Y = 2.2; // deck height
-      const T = 0.04; // deck thickness
-      const rail = 0.28; // rail height above the deck
-      const R = 0.035; // rail thickness
-      const part = (w: number, h: number, d: number, x: number, y: number, z: number) => {
-        const mesh = metalBox(w, h, d, palette.chrome, x, y, z, 0.006);
-        mesh.userData.shiny = true; // polished finish + environment reflections
-        group.add(mesh);
-      };
-
-      // Slotted deck: solid corner square plus slats along both arms.
-      part(W, T, W, W / 2, Y, W / 2);
-      for (let x = W + 0.045; x < L - 0.05; x += 0.09) part(0.05, T, W, x, Y, W / 2);
-      for (let z = W + 0.045; z < L - 0.05; z += 0.09) part(W, T, 0.05, W / 2, Y, z);
-      part(0.05, T, W, L - 0.025, Y, W / 2);
-      part(W, T, 0.05, W / 2, Y, L - 0.025);
-
-      // Aprons around the free edges plus back plates against the walls.
-      const AH = 0.13;
-      const AY = Y - 0.045;
-      part(L - W, AH, 0.03, W + (L - W) / 2, AY, W - 0.015);
-      part(0.03, AH, W, L - 0.015, AY, W / 2);
-      part(0.03, AH, L - W, W - 0.015, AY, W + (L - W) / 2);
-      part(W, AH, 0.03, W / 2, AY, L - 0.015);
-      part(L, AH, 0.02, L / 2, AY, 0.01);
-      part(0.02, AH, L, 0.01, AY, L / 2);
-
-      // Top rails and posts.
-      const RY = Y + rail;
-      part(L - W, R, R, W + (L - W) / 2, RY, W - 0.02);
-      part(R, R, W, L - 0.02, RY, W / 2);
-      part(R, R, L - W, W - 0.02, RY, W + (L - W) / 2);
-      part(W, R, R, W / 2, RY, L - 0.02);
-      part(L, R, R, L / 2, RY, 0.02);
-      part(R, R, L, 0.02, RY, L / 2);
-      [
-        [W - 0.02, W - 0.02],
-        [L - 0.02, W - 0.02],
-        [L - 0.02, 0.02],
-        [W - 0.02, L - 0.02],
-        [0.02, L - 0.02],
-        [0.02, 0.02],
-      ].forEach(([px, pz]) => {
-        const post = tube(0.016, rail, "y", px, Y + rail / 2, pz);
-        post.userData.shiny = true;
-        group.add(post);
-      });
-
-      group.add(hitBox(L, 0.5, L, L / 2, Y + 0.1, L / 2));
-      break;
-    }
-
-    case "clearDoor": {
-      buildShowerDoor(group, false);
-      break;
-    }
-
-    case "frostedDoor": {
-      buildShowerDoor(group, true);
-      break;
-    }
-
-    case "showerRod": {
-      group.add(tube(0.035, 2.8, "x", 0, 3.6, 0.28));
-      [-1.4, 1.4].forEach((x) => {
-        group.add(tube(0.03, 0.28, "z", x, 3.6, 0.14));
-        group.add(flange(x, 3.6, 0.1));
-        group.add(ball(0.04, x, 3.6, 0.28));
-      });
-      for (let i = 0; i < 9; i += 1) {
-        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.014, 8, 24), metalMaterial(palette.chrome));
-        ring.rotation.y = Math.PI / 2;
-        ring.position.set(-1.1 + i * 0.275, 3.6, 0.28);
-        ring.castShadow = true;
-        group.add(ring);
-      }
-      group.add(hitBox(2.9, 0.3, 0.45, 0, 3.6, 0.2));
-      break;
-    }
-
-    case "grabHorizontal": {
-      group.add(tube(0.045, 1.2, "x", 0, 1.5, 0.3));
-      [-0.5, 0.5].forEach((x) => {
-        group.add(tube(0.035, 0.3, "z", x, 1.5, 0.15));
-        group.add(flange(x, 1.5, 0.1));
-      });
-      group.add(ball(0.045, -0.6, 1.5, 0.3));
-      group.add(ball(0.045, 0.6, 1.5, 0.3));
-      group.add(hitBox(1.3, 0.35, 0.45, 0, 1.5, 0.22));
-      break;
-    }
-
-    case "grabAngled": {
-      const angle = 0.6; // ≈ 35° from vertical
-      const half = 0.55;
-      const bar = tube(0.045, half * 2, "y", 0, 1.7, 0.3);
-      bar.rotation.z = -angle;
-      group.add(bar);
-      [-0.8, 0.8].forEach((t) => {
-        const px = Math.sin(angle) * half * t;
-        const py = 1.7 + Math.cos(angle) * half * t;
-        group.add(tube(0.035, 0.3, "z", px, py, 0.15));
-        group.add(flange(px, py, 0.1));
-      });
-      group.add(ball(0.045, Math.sin(angle) * half, 1.7 + Math.cos(angle) * half, 0.3));
-      group.add(ball(0.045, -Math.sin(angle) * half, 1.7 - Math.cos(angle) * half, 0.3));
-      group.add(hitBox(0.9, 1.3, 0.45, 0, 1.7, 0.22));
-      break;
-    }
-  }
-
-  return group;
 }
 
 const tubColors = [
@@ -1274,27 +1030,55 @@ function applyTubColor(object: THREE.Object3D, color: number) {
 }
 
 const fixtureFinishes = [
-  { id: "chrome", name: "Steel / Chrome", hex: 0xdde1e4, roughness: 0.28, metalness: 0.85 },
+  {
+    id: "chrome",
+    name: "Steel / Chrome",
+    hex: 0xdde1e4,
+    roughness: 0.28,
+    metalness: 0.85,
+  },
   { id: "gold", name: "Gold", hex: 0xd4a937, roughness: 0.25, metalness: 0.9 },
-  { id: "black", name: "Black", hex: 0x1f2124, roughness: 0.42, metalness: 0.55 },
-  { id: "bronze", name: "Bronze", hex: 0x8a5a32, roughness: 0.34, metalness: 0.8 },
+  {
+    id: "black",
+    name: "Black",
+    hex: 0x1f2124,
+    roughness: 0.42,
+    metalness: 0.55,
+  },
+  {
+    id: "bronze",
+    name: "Bronze",
+    hex: 0x8a5a32,
+    roughness: 0.34,
+    metalness: 0.8,
+  },
 ];
 
 /** Re-finish every metal part of a fixture (parts tagged as `finish`). */
-function applyFinish(object: THREE.Object3D, finish: (typeof fixtureFinishes)[number]) {
+function applyFinish(
+  object: THREE.Object3D,
+  finish: (typeof fixtureFinishes)[number],
+) {
   object.traverse((child) => {
     if (child instanceof THREE.Mesh && child.userData.finish) {
       const mat = child.material as THREE.MeshStandardMaterial;
       mat.color.setHex(finish.hex);
       // Parts tagged "shiny" (shower door frames) get a near-mirror polish.
-      mat.roughness = child.userData.shiny ? finish.roughness * 0.3 : finish.roughness;
-      mat.metalness = child.userData.shiny ? Math.min(1, finish.metalness + 0.1) : finish.metalness;
+      mat.roughness = child.userData.shiny
+        ? finish.roughness * 0.3
+        : finish.roughness;
+      mat.metalness = child.userData.shiny
+        ? Math.min(1, finish.metalness + 0.1)
+        : finish.metalness;
     }
   });
 }
 
 /** Give shower door metal and glass real environment reflections. */
-function applyDoorReflections(object: THREE.Object3D, env: THREE.Texture | null) {
+function applyDoorReflections(
+  object: THREE.Object3D,
+  env: THREE.Texture | null,
+) {
   if (!env) return;
   object.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return;
@@ -1308,11 +1092,29 @@ function applyDoorReflections(object: THREE.Object3D, env: THREE.Texture | null)
   });
 }
 
+/** Give the glazed ceramic tub real environment reflections. */
+function applyCeramicReflections(
+  object: THREE.Object3D,
+  env: THREE.Texture | null,
+) {
+  if (!env) return;
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh) || !child.userData.paint) return;
+    const mat = child.material as THREE.MeshStandardMaterial;
+    if (mat.envMap === env) return;
+    mat.envMap = env;
+    mat.envMapIntensity = 1.2;
+    mat.needsUpdate = true;
+  });
+}
+
 function disposeObject(object: THREE.Object3D) {
   object.traverse((child) => {
     if (child instanceof THREE.Mesh) {
       child.geometry.dispose();
-      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      const materials = Array.isArray(child.material)
+        ? child.material
+        : [child.material];
       materials.forEach((item) => {
         (item as THREE.MeshStandardMaterial).map?.dispose();
         item.dispose();
@@ -1325,18 +1127,34 @@ type RoomCanvasProps = {
   items: PlacedAsset[];
   selectedUid: number | null;
   onSelect: (uid: number | null) => void;
-  onMove: (uid: number, x: number, z: number, rotation?: number, y?: number) => void;
+  onMove: (
+    uid: number,
+    x: number,
+    z: number,
+    rotation?: number,
+    y?: number,
+  ) => void;
   onRotate: (uid: number, rotation: number) => void;
   onReady: (reset: () => void) => void;
   wallTile: string | null;
 };
 
-function RoomCanvas({ items, selectedUid, onSelect, onMove, onRotate, onReady, wallTile }: RoomCanvasProps) {
+function RoomCanvas({
+  items,
+  selectedUid,
+  onSelect,
+  onMove,
+  onRotate,
+  onReady,
+  wallTile,
+}: RoomCanvasProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const assetGroupRef = useRef<THREE.Group | null>(null);
   const objectsRef = useRef<Map<number, THREE.Group>>(new Map());
   const selectedRef = useRef<number | null>(selectedUid);
-  const tilePlanesRef = useRef<{ mesh: THREE.Mesh; width: number; height: number }[]>([]);
+  const tilePlanesRef = useRef<
+    { mesh: THREE.Mesh; width: number; height: number }[]
+  >([]);
   const marbleRef = useRef<THREE.Mesh | null>(null);
   const tileTexturesRef = useRef<THREE.Texture[]>([]);
   const envRef = useRef<THREE.Texture | null>(null);
@@ -1380,12 +1198,14 @@ function RoomCanvas({ items, selectedUid, onSelect, onMove, onRotate, onReady, w
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
     controls.target.copy(TARGET_START);
-    controls.minDistance = 5;    // Restrict zoom-in minimum
-    controls.maxDistance = 10;   // Restrict zoom-out to keep bath area prominent
-    controls.maxPolarAngle = Math.PI / 2.02;
-    // Limit horizontal rotation for front-facing view
-    controls.minAzimuthAngle = -Math.PI / 4; // -45 degrees
-    controls.maxAzimuthAngle = Math.PI / 4;  // +45 degrees
+    controls.minDistance = 5; // Restrict zoom-in minimum
+    controls.maxDistance = 10; // Restrict zoom-out to keep bath area prominent
+    // Restrict vertical rotation to keep bath area in view
+    controls.minPolarAngle = Math.PI / 3; // 45 degrees - prevents looking too far down
+    controls.maxPolarAngle = Math.PI / 2.02; // ~78 degrees - prevents looking too far up
+    // Tighter horizontal rotation limit to keep focus on bath area
+    controls.minAzimuthAngle = -Math.PI / 8; // -30 degrees (reduced from -45)
+    controls.maxAzimuthAngle = Math.PI / 8;  // +30 degrees (reduced from +45)
     controls.update();
 
     const reset = () => {
@@ -1398,11 +1218,11 @@ function RoomCanvas({ items, selectedUid, onSelect, onMove, onRotate, onReady, w
     // ---------- Lighting ----------
     scene.add(new THREE.HemisphereLight(0xfff8e7, 0x827568, 1.0));
     const hemiLight = new THREE.HemisphereLight(
-  0xfff8e7, // Creamy ivory sky
-  0x827568, // Warm taupe ground
-  1.1
-);
-scene.add(hemiLight);
+      0xfff8e7, // Creamy ivory sky
+      0x827568, // Warm taupe ground
+      1.1,
+    );
+    scene.add(hemiLight);
     const sun = new THREE.DirectionalLight(0xf5e6cc, 2.5);
     sun.position.set(4, 6, 3);
     sun.castShadow = true;
@@ -1425,14 +1245,17 @@ scene.add(hemiLight);
     });
 
     // ---------- Floor ----------
+    const FLOOR_BACK_Z = -6.5; // tucks under the bath platform
+    const floorWidth = ROOM_HALF_WIDTH * 2;
+    const floorDepth = ROOM_FRONT_Z - FLOOR_BACK_Z;
     const floorTexture = createFloorTile();
-    floorTexture.repeat.set(10, 6.67); // Adjusted texture repeat for 12x8
+    floorTexture.repeat.set(floorWidth / 1.2, floorDepth / 1.2);
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(12, 8), // Extended to cover full area to walls
+      new THREE.PlaneGeometry(floorWidth, floorDepth),
       new THREE.MeshStandardMaterial({ map: floorTexture, roughness: 0.55 }),
     );
     floor.rotation.x = -Math.PI / 2;
-    floor.position.z = -2.5; // Aligned with wet area
+    floor.position.z = FLOOR_BACK_Z + floorDepth / 2;
     floor.receiveShadow = true;
     scene.add(floor);
 
@@ -1455,7 +1278,10 @@ scene.add(hemiLight);
       return mesh;
     };
 
-    const wallMaterial = new THREE.MeshStandardMaterial({ color: palette.wall, roughness: 0.96 });
+    const wallMaterial = new THREE.MeshStandardMaterial({
+      color: palette.wall,
+      roughness: 0.96,
+    });
     const trimMaterial = new THREE.MeshStandardMaterial({
       color: palette.trim,
       roughness: 0.6,
@@ -1463,18 +1289,71 @@ scene.add(hemiLight);
     });
 
     // Back wall: narrow side segments plus a header above the wide alcove opening.
-    const sideWidth = 6 - ALCOVE_HALF_WIDTH;
+    const sideWidth = ROOM_HALF_WIDTH - ALCOVE_HALF_WIDTH;
     const alcoveWidth = ALCOVE_HALF_WIDTH * 2;
     const alcoveMidZ = -5 - ALCOVE_DEPTH / 2;
-    addPlane(sideWidth, 6, -(ALCOVE_HALF_WIDTH + sideWidth / 2), 3, -5, wallMaterial);
-    addPlane(sideWidth, 6, ALCOVE_HALF_WIDTH + sideWidth / 2, 3, -5, wallMaterial);
-    addPlane(alcoveWidth, 6 - ALCOVE_HEIGHT, 0, ALCOVE_HEIGHT + (6 - ALCOVE_HEIGHT) / 2, -5, wallMaterial);
+    addPlane(
+      sideWidth,
+      6,
+      -(ALCOVE_HALF_WIDTH + sideWidth / 2),
+      3,
+      -5,
+      wallMaterial,
+    );
+    addPlane(
+      sideWidth,
+      6,
+      ALCOVE_HALF_WIDTH + sideWidth / 2,
+      3,
+      -5,
+      wallMaterial,
+    );
+    addPlane(
+      alcoveWidth,
+      6 - ALCOVE_HEIGHT,
+      0,
+      ALCOVE_HEIGHT + (6 - ALCOVE_HEIGHT) / 2,
+      -5,
+      wallMaterial,
+    );
 
     // Deep recessed alcove: white returns, ceiling and a pale veined stone panel.
-    addPlane(alcoveWidth, ALCOVE_HEIGHT, 0, ALCOVE_HEIGHT / 2, -5 - ALCOVE_DEPTH, trimMaterial);
-    addPlane(ALCOVE_DEPTH, ALCOVE_HEIGHT, -ALCOVE_HALF_WIDTH, ALCOVE_HEIGHT / 2, alcoveMidZ, trimMaterial, Math.PI / 2);
-    addPlane(ALCOVE_DEPTH, ALCOVE_HEIGHT, ALCOVE_HALF_WIDTH, ALCOVE_HEIGHT / 2, alcoveMidZ, trimMaterial, -Math.PI / 2);
-    addPlane(alcoveWidth, ALCOVE_DEPTH, 0, ALCOVE_HEIGHT, alcoveMidZ, trimMaterial, 0, Math.PI / 2);
+    addPlane(
+      alcoveWidth,
+      ALCOVE_HEIGHT,
+      0,
+      ALCOVE_HEIGHT / 2,
+      -5 - ALCOVE_DEPTH,
+      trimMaterial,
+    );
+    addPlane(
+      ALCOVE_DEPTH,
+      ALCOVE_HEIGHT,
+      -ALCOVE_HALF_WIDTH,
+      ALCOVE_HEIGHT / 2,
+      alcoveMidZ,
+      trimMaterial,
+      Math.PI / 2,
+    );
+    addPlane(
+      ALCOVE_DEPTH,
+      ALCOVE_HEIGHT,
+      ALCOVE_HALF_WIDTH,
+      ALCOVE_HEIGHT / 2,
+      alcoveMidZ,
+      trimMaterial,
+      -Math.PI / 2,
+    );
+    addPlane(
+      alcoveWidth,
+      ALCOVE_DEPTH,
+      0,
+      ALCOVE_HEIGHT,
+      alcoveMidZ,
+      trimMaterial,
+      0,
+      Math.PI / 2,
+    );
     const marblePanel = addPlane(
       alcoveWidth - 0.7,
       4.3,
@@ -1485,8 +1364,16 @@ scene.add(hemiLight);
     );
 
     // Wall-tile planes covering the three inner walls of the wet area (hidden until a tile is chosen).
-    const makeTileMaterial = () => new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 });
-    const tileBack = addPlane(alcoveWidth, ALCOVE_HEIGHT, 0, ALCOVE_HEIGHT / 2, -5 - ALCOVE_DEPTH + 0.004, makeTileMaterial());
+    const makeTileMaterial = () =>
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 });
+    const tileBack = addPlane(
+      alcoveWidth,
+      ALCOVE_HEIGHT,
+      0,
+      ALCOVE_HEIGHT / 2,
+      -5 - ALCOVE_DEPTH + 0.004,
+      makeTileMaterial(),
+    );
     const tileLeft = addPlane(
       ALCOVE_DEPTH,
       ALCOVE_HEIGHT,
@@ -1516,12 +1403,53 @@ scene.add(hemiLight);
     marbleRef.current = marblePanel;
 
     // White lip framing the opening.
-    scene.add(box(0.14, ALCOVE_HEIGHT + 0.12, 0.06, palette.trim, -ALCOVE_HALF_WIDTH - 0.07, ALCOVE_HEIGHT / 2 + 0.06, -4.97));
-    scene.add(box(0.14, ALCOVE_HEIGHT + 0.12, 0.06, palette.trim, ALCOVE_HALF_WIDTH + 0.07, ALCOVE_HEIGHT / 2 + 0.06, -4.97));
-    scene.add(box(alcoveWidth + 0.28, 0.14, 0.06, palette.trim, 0, ALCOVE_HEIGHT + 0.07, -4.97));
+    scene.add(
+      box(
+        0.14,
+        ALCOVE_HEIGHT + 0.12,
+        0.06,
+        palette.trim,
+        -ALCOVE_HALF_WIDTH - 0.07,
+        ALCOVE_HEIGHT / 2 + 0.06,
+        -4.97,
+      ),
+    );
+    scene.add(
+      box(
+        0.14,
+        ALCOVE_HEIGHT + 0.12,
+        0.06,
+        palette.trim,
+        ALCOVE_HALF_WIDTH + 0.07,
+        ALCOVE_HEIGHT / 2 + 0.06,
+        -4.97,
+      ),
+    );
+    scene.add(
+      box(
+        alcoveWidth + 0.28,
+        0.14,
+        0.06,
+        palette.trim,
+        0,
+        ALCOVE_HEIGHT + 0.07,
+        -4.97,
+      ),
+    );
 
     // Shower base / bath platform filling the floor of the alcove, with a low front lip.
-    scene.add(box(alcoveWidth, 0.12, ALCOVE_DEPTH + 0.5, 0xf9f8f5, 0, 0.06, -5 - ALCOVE_DEPTH / 2 + 0.25, 0.03));
+    scene.add(
+      box(
+        alcoveWidth,
+        0.12,
+        ALCOVE_DEPTH + 0.5,
+        0xf9f8f5,
+        0,
+        0.06,
+        -5 - ALCOVE_DEPTH / 2 + 0.25,
+        0.03,
+      ),
+    );
 
     // Recessed ceiling light fixtures.
     downlightXs.forEach((lx) => {
@@ -1539,47 +1467,91 @@ scene.add(hemiLight);
       scene.add(lightDisc);
     });
 
-    // Left wall: shorter wall with marble finish to match bath area.
-    const leftWallMarble = createMarble();
-    leftWallMarble.repeat.set(1.5, 1);
-    const leftWall = new THREE.Mesh(
-      new THREE.PlaneGeometry(6, 6), // Reduced from 10 to 6 to focus on wet area
-      new THREE.MeshStandardMaterial({
-        map: leftWallMarble,
-        roughness: 0.45,
-        side: THREE.DoubleSide,
-      }),
-    );
-    leftWall.position.set(-6, 3, -2); // Moved back to align with wet area
-    leftWall.rotation.y = Math.PI / 2;
-    leftWall.receiveShadow = true;
-    scene.add(leftWall);
+    // Side walls: short cut-away walls on each side of the bath area, running from the back wall
+    // to the front of the room.
+    const sideWallLength = ROOM_FRONT_Z - BACK_WALL_Z;
+    const sideWallCenterZ = (ROOM_FRONT_Z + BACK_WALL_Z) / 2;
+    const makeSideWall = (x: number, rotationY: number) => {
+      const texture = createMarble();
+      texture.repeat.set(sideWallLength / 4, 1);
+      const wall = new THREE.Mesh(
+        new THREE.PlaneGeometry(sideWallLength, 6),
+        new THREE.MeshStandardMaterial({
+          map: texture,
+          roughness: 0.45,
+          side: THREE.DoubleSide,
+        }),
+      );
+      wall.position.set(x, 3, sideWallCenterZ);
+      wall.rotation.y = rotationY;
+      wall.receiveShadow = true;
+      scene.add(wall);
+    };
+    makeSideWall(-ROOM_HALF_WIDTH, Math.PI / 2); // left wall
+    makeSideWall(ROOM_HALF_WIDTH, -Math.PI / 2); // right wall
 
-    // Right wall: matching the left wall style.
-    const rightWallMarble = createMarble();
-    rightWallMarble.repeat.set(1.5, 1);
-    const rightWall = new THREE.Mesh(
-      new THREE.PlaneGeometry(6, 6),
-      new THREE.MeshStandardMaterial({
-        map: rightWallMarble,
-        roughness: 0.45,
-        side: THREE.DoubleSide,
-      }),
+    // Baseboards for the back wall strips and both side walls.
+    scene.add(
+      box(
+        sideWidth,
+        0.22,
+        0.08,
+        palette.base,
+        -(ALCOVE_HALF_WIDTH + sideWidth / 2),
+        0.11,
+        -4.96,
+      ),
     );
-    rightWall.position.set(6, 3, -2);
-    rightWall.rotation.y = -Math.PI / 2;
-    rightWall.receiveShadow = true;
-    scene.add(rightWall);
-
-    // Baseboards for back wall and side walls.
-    scene.add(box(6 - ALCOVE_HALF_WIDTH, 0.22, 0.08, palette.base, -(ALCOVE_HALF_WIDTH + (6 - ALCOVE_HALF_WIDTH) / 2), 0.11, -4.96));
-    scene.add(box(0.08, 0.22, 6, palette.base, -5.96, 0.11, -2)); // Left wall baseboard (shorter)
-    scene.add(box(0.08, 0.22, 6, palette.base, 5.96, 0.11, -2));  // Right wall baseboard
+    scene.add(
+      box(
+        sideWidth,
+        0.22,
+        0.08,
+        palette.base,
+        ALCOVE_HALF_WIDTH + sideWidth / 2,
+        0.11,
+        -4.96,
+      ),
+    );
+    scene.add(
+      box(
+        0.08,
+        0.22,
+        sideWallLength,
+        palette.base,
+        -ROOM_HALF_WIDTH + 0.04,
+        0.11,
+        sideWallCenterZ,
+      ),
+    );
+    scene.add(
+      box(
+        0.08,
+        0.22,
+        sideWallLength,
+        palette.base,
+        ROOM_HALF_WIDTH - 0.04,
+        0.11,
+        sideWallCenterZ,
+      ),
+    );
 
     // ---------- Placed assets ----------
     const assetGroup = new THREE.Group();
     assetGroupRef.current = assetGroup;
     scene.add(assetGroup);
+
+    // Static decor so the outer walls aren't blank (not selectable or draggable):
+    // tiled vanity wall, vanity, mirror, lights and towels.
+    const decor = buildBathroomDecor({
+      rightWallX: RIGHT_WALL_X,
+      backWallZ: BACK_WALL_Z,
+      frontWallZ: ROOM_FRONT_Z,
+      alcoveHalfWidth: ALCOVE_HALF_WIDTH,
+      wallHeight: 6,
+      envMap: envTexture,
+    });
+    scene.add(decor);
 
     // Selection ring that follows the selected floor item.
     const ring = new THREE.Mesh(
@@ -1638,10 +1610,14 @@ scene.add(hemiLight);
       raycaster.setFromCamera(pointer, camera);
     };
 
-    const pickItem = (): { group: THREE.Group; point: THREE.Vector3 } | null => {
+    const pickItem = (): {
+      group: THREE.Group;
+      point: THREE.Vector3;
+    } | null => {
       const hits = raycaster.intersectObjects(assetGroup.children, true);
       // Glass is see-through for picking: prefer whatever is behind it, fall back to the door itself.
-      const hit = hits.find((candidate) => !candidate.object.userData.glass) ?? hits[0];
+      const hit =
+        hits.find((candidate) => !candidate.object.userData.glass) ?? hits[0];
       if (!hit) return null;
       let target: THREE.Object3D | null = hit.object;
       while (target && target.parent !== assetGroup) target = target.parent;
@@ -1674,6 +1650,14 @@ scene.add(hemiLight);
       }
 
       const hit = pickItem();
+
+      // Locked items (the tubs): select them (shows the colour toolbar) but never drag them.
+      // We don't stop propagation, so orbiting still works when dragging over them.
+      if (hit && hit.group.userData.locked) {
+        onSelectRef.current(hit.group.userData.uid as number);
+        return;
+      }
+
       let canDrag = false;
       if (hit) {
         if (hit.group.userData.mount === "wall") {
@@ -1716,9 +1700,13 @@ scene.add(hemiLight);
       setRay(event);
       if (rotating) {
         if (raycaster.ray.intersectPlane(floorPlane, hitPoint)) {
-          let angle = Math.atan2(hitPoint.x - rotating.position.x, hitPoint.z - rotating.position.z);
+          let angle = Math.atan2(
+            hitPoint.x - rotating.position.x,
+            hitPoint.z - rotating.position.z,
+          );
           // Hold Shift to snap to 15° steps.
-          if (event.shiftKey) angle = Math.round(angle / (Math.PI / 12)) * (Math.PI / 12);
+          if (event.shiftKey)
+            angle = Math.round(angle / (Math.PI / 12)) * (Math.PI / 12);
           rotating.rotation.y = angle;
         }
         return;
@@ -1729,18 +1717,30 @@ scene.add(hemiLight);
           const nx = hitPoint.x + drag.offsetX;
           const nz = hitPoint.z + drag.offsetZ;
           if (drag.wall) {
-            const snapped = snapToWall(nx, nz, (drag.object.userData.halfWidth as number) ?? 0.4);
+            const snapped = snapToWall(
+              nx,
+              nz,
+              (drag.object.userData.halfWidth as number) ?? 0.4,
+            );
             const minY = (drag.object.userData.minY as number) ?? 0;
             const maxY = (drag.object.userData.maxY as number) ?? 4;
             const top = snapped.alcove ? ALCOVE_HEIGHT - 0.1 : 5.9;
-            const y = clampRange(hitPoint.y + drag.offsetY, 0.1 - minY, top - maxY);
+            const y = clampRange(
+              hitPoint.y + drag.offsetY,
+              0.1 - minY,
+              top - maxY,
+            );
             drag.object.position.set(snapped.x, y, snapped.z);
             drag.object.rotation.y = snapped.rotation;
           } else if (drag.corner) {
             const snapped = snapToCorner(nx, ALCOVE_BACK_Z);
             const minY = (drag.object.userData.minY as number) ?? 0;
             const maxY = (drag.object.userData.maxY as number) ?? 4;
-            const y = clampRange(hitPoint.y + drag.offsetY, 0.1 - minY, ALCOVE_HEIGHT - 0.1 - maxY);
+            const y = clampRange(
+              hitPoint.y + drag.offsetY,
+              0.1 - minY,
+              ALCOVE_HEIGHT - 0.1 - maxY,
+            );
             drag.object.position.set(snapped.x, y, snapped.z);
             drag.object.rotation.y = snapped.rotation;
           } else {
@@ -1753,8 +1753,11 @@ scene.add(hemiLight);
         return;
       }
       if (event.buttons === 0) {
-        const overHandle = handle.visible && raycaster.intersectObject(handle).length > 0;
-        canvasEl.style.cursor = overHandle || pickItem() ? "grab" : "";
+        const overHandle =
+          handle.visible && raycaster.intersectObject(handle).length > 0;
+        const over = pickItem();
+        const movable = !!over && !over.group.userData.locked;
+        canvasEl.style.cursor = overHandle || movable ? "grab" : "";
       }
     };
 
@@ -1790,7 +1793,10 @@ scene.add(hemiLight);
         return;
       }
       if (backgroundDown) {
-        const distance = Math.hypot(event.clientX - backgroundDown.x, event.clientY - backgroundDown.y);
+        const distance = Math.hypot(
+          event.clientX - backgroundDown.x,
+          event.clientY - backgroundDown.y,
+        );
         backgroundDown = null;
         // A click (not an orbit drag) on empty space deselects.
         if (distance < 5) onSelectRef.current(null);
@@ -1818,8 +1824,15 @@ scene.add(hemiLight);
       frame = requestAnimationFrame(animate);
       controls.update();
 
-      const selected = selectedRef.current !== null ? objectsRef.current.get(selectedRef.current) : undefined;
-      if (selected && selected.userData.mount === "floor") {
+      const selected =
+        selectedRef.current !== null
+          ? objectsRef.current.get(selectedRef.current)
+          : undefined;
+      if (
+        selected &&
+        selected.userData.mount === "floor" &&
+        !selected.userData.locked
+      ) {
         ringBox.setFromObject(selected);
         ringBox.getSize(ringSize);
         const radius = Math.max(ringSize.x, ringSize.z) / 2 + 0.14;
@@ -1854,6 +1867,8 @@ scene.add(hemiLight);
       pmrem.dispose();
       renderer.dispose();
       renderer.domElement.remove();
+      // The decor mirror owns its own render target; free it before disposing the scene.
+      (decor.userData.dispose as (() => void) | undefined)?.();
       disposeObject(scene);
       objectsRef.current.clear();
       assetGroupRef.current = null;
@@ -1873,7 +1888,9 @@ scene.add(hemiLight);
     tileTexturesRef.current.forEach((texture) => texture.dispose());
     tileTexturesRef.current = [];
 
-    const design = wallTile ? wallTiles.find((tile) => tile.id === wallTile) : undefined;
+    const design = wallTile
+      ? wallTiles.find((tile) => tile.id === wallTile)
+      : undefined;
     marble.visible = !design;
 
     let cancelled = false;
@@ -1931,6 +1948,7 @@ scene.add(hemiLight);
         object.userData.maxY = bounds.max.y;
         object.userData.uid = item.uid;
         object.userData.mount = assetById[item.type].mount;
+        object.userData.locked = !!assetById[item.type].locked;
         object.userData.halfWidth = assetById[item.type].halfWidth ?? 0.4;
         assetGroup.add(object);
         objects.set(item.uid, object);
@@ -1940,11 +1958,26 @@ scene.add(hemiLight);
       const itemCategory = assetById[item.type].category;
       if (itemCategory === "Bathtubs") {
         applyTubColor(object, item.color ?? tubColors[0].hex);
-      } else if (itemCategory === "Fixtures" || itemCategory === "Grab bars" || itemCategory === "Shower doors" || itemCategory === "Accessories") {
-        const finish = fixtureFinishes.find((f) => f.hex === item.color) ?? fixtureFinishes[0];
+      } else if (
+        itemCategory === "Fixtures" ||
+        itemCategory === "Grab bars" ||
+        itemCategory === "Shower doors" ||
+        itemCategory === "Accessories"
+      ) {
+        const finish =
+          fixtureFinishes.find((f) => f.hex === item.color) ??
+          fixtureFinishes[0];
         applyFinish(object, finish);
       }
-      if (itemCategory === "Shower doors" || itemCategory === "Accessories") applyDoorReflections(object, envRef.current);
+      if (
+        itemCategory === "Shower doors" ||
+        itemCategory === "Accessories" ||
+        itemCategory === "Fixtures" ||
+        itemCategory === "Grab bars"
+      )
+        applyDoorReflections(object, envRef.current);
+      if (itemCategory === "Bathtubs")
+        applyCeramicReflections(object, envRef.current);
     });
   }, [items]);
 
@@ -1954,7 +1987,9 @@ scene.add(hemiLight);
       const isSelected = uid === selectedUid;
       object.traverse((child) => {
         if (child instanceof THREE.Mesh) {
-          const materials = Array.isArray(child.material) ? child.material : [child.material];
+          const materials = Array.isArray(child.material)
+            ? child.material
+            : [child.material];
           materials.forEach((item) => {
             if (item instanceof THREE.MeshStandardMaterial) {
               item.emissive.setHex(isSelected ? 0x2f6f5e : 0x000000);
@@ -1966,7 +2001,13 @@ scene.add(hemiLight);
     });
   }, [selectedUid, items]);
 
-  return <div ref={mountRef} className="room-canvas" aria-label="Interactive 3D bathroom preview" />;
+  return (
+    <div
+      ref={mountRef}
+      className="room-canvas"
+      aria-label="Interactive 3D bathroom preview"
+    />
+  );
 }
 
 function App() {
@@ -2005,7 +2046,10 @@ function App() {
       const filteredItems = current.filter((item) => {
         const itemAsset = assetById[item.type];
         // Accessories can be combined; every other category allows one item at a time.
-        return asset.category === "Accessories" || itemAsset.category !== asset.category;
+        return (
+          asset.category === "Accessories" ||
+          itemAsset.category !== asset.category
+        );
       });
 
       // Add the new item
@@ -2033,27 +2077,60 @@ function App() {
 
       setSelectedUid(uid);
       showToast(`${asset.name} added to the bathroom`, 1800);
-      return [...filteredItems, { uid, type: asset.id, x, z, rotation, y: 0, color: asset.defaultColor }];
+      return [
+        ...filteredItems,
+        {
+          uid,
+          type: asset.id,
+          x,
+          z,
+          rotation,
+          y: 0,
+          color: asset.defaultColor,
+        },
+      ];
     });
   };
 
-  const moveItem = (uid: number, x: number, z: number, rotation?: number, y?: number) => {
+  const moveItem = (
+    uid: number,
+    x: number,
+    z: number,
+    rotation?: number,
+    y?: number,
+  ) => {
     setPlacedItems((current) =>
       current.map((item) =>
-        item.uid === uid ? { ...item, x, z, rotation: rotation ?? item.rotation, y: y ?? item.y } : item,
+        item.uid === uid
+          ? {
+              ...item,
+              x,
+              z,
+              rotation: rotation ?? item.rotation,
+              y: y ?? item.y,
+            }
+          : item,
       ),
     );
   };
 
   const rotateItem = (uid: number, rotation: number) => {
-    setPlacedItems((current) => current.map((item) => (item.uid === uid ? { ...item, rotation } : item)));
+    setPlacedItems((current) =>
+      current.map((item) => (item.uid === uid ? { ...item, rotation } : item)),
+    );
+  };
+
+  /** Floor items that aren't locked can be rotated. */
+  const canRotateItem = (item: PlacedAsset) => {
+    const asset = assetById[item.type];
+    return asset.mount === "floor" && !asset.locked;
   };
 
   const rotateSelected = () => {
     if (selectedUid === null) return;
     setPlacedItems((current) =>
       current.map((item) =>
-        item.uid === selectedUid && assetById[item.type].mount === "floor"
+        item.uid === selectedUid && canRotateItem(item)
           ? { ...item, rotation: item.rotation + Math.PI / 4 }
           : item,
       ),
@@ -2063,16 +2140,25 @@ function App() {
   const applyWallTile = (tile: WallTileDesign) => {
     const next = wallTile === tile.id ? null : tile.id;
     setWallTile(next);
-    showToast(next ? `${tile.name} applied to the bath area walls` : "Original stone panel restored", 1800);
+    showToast(
+      next
+        ? `${tile.name} applied to the bath area walls`
+        : "Original stone panel restored",
+      1800,
+    );
   };
 
   const recolorItem = (uid: number, color: number) => {
-    setPlacedItems((current) => current.map((item) => (item.uid === uid ? { ...item, color } : item)));
+    setPlacedItems((current) =>
+      current.map((item) => (item.uid === uid ? { ...item, color } : item)),
+    );
   };
 
   const removeSelected = () => {
     if (selectedUid === null) return;
-    setPlacedItems((current) => current.filter((item) => item.uid !== selectedUid));
+    setPlacedItems((current) =>
+      current.filter((item) => item.uid !== selectedUid),
+    );
     setSelectedUid(null);
     showToast("Item removed", 1400);
   };
@@ -2095,17 +2181,28 @@ function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
+        return;
       if (event.key === "Escape") {
         setSelectedUid(null);
-      } else if ((event.key === "Delete" || event.key === "Backspace") && selectedUid !== null) {
+      } else if (
+        (event.key === "Delete" || event.key === "Backspace") &&
+        selectedUid !== null
+      ) {
         event.preventDefault();
-        setPlacedItems((current) => current.filter((item) => item.uid !== selectedUid));
+        setPlacedItems((current) =>
+          current.filter((item) => item.uid !== selectedUid),
+        );
         setSelectedUid(null);
-      } else if ((event.key === "r" || event.key === "R") && selectedUid !== null) {
+      } else if (
+        (event.key === "r" || event.key === "R") &&
+        selectedUid !== null
+      ) {
         setPlacedItems((current) =>
           current.map((item) =>
-            item.uid === selectedUid && assetById[item.type].mount === "floor"
+            item.uid === selectedUid &&
+            assetById[item.type].mount === "floor" &&
+            !assetById[item.type].locked
               ? { ...item, rotation: item.rotation + Math.PI / 4 }
               : item,
           ),
@@ -2118,7 +2215,8 @@ function App() {
 
   const selectedItem = placedItems.find((item) => item.uid === selectedUid);
   const selectedAsset = selectedItem ? assetById[selectedItem.type] : undefined;
-  const canRotate = selectedAsset?.mount === "floor";
+  const canRotate =
+    selectedAsset?.mount === "floor" && !selectedAsset.locked;
   // Floating swatch bar: tub colours for bathtubs, metal finishes for fixtures.
   const swatches: { id: string; name: string; hex: number }[] | null =
     selectedAsset?.category === "Bathtubs"
@@ -2126,13 +2224,16 @@ function App() {
       : selectedAsset?.category === "Fixtures" ||
           selectedAsset?.category === "Grab bars" ||
           selectedAsset?.category === "Shower doors" ||
-          (selectedAsset?.category === "Accessories" && selectedAsset.id !== "showerShelf")
+          (selectedAsset?.category === "Accessories" &&
+            selectedAsset.id !== "showerShelf")
         ? fixtureFinishes
         : null;
-  const swatchLabel = selectedAsset?.category === "Bathtubs" ? "Tub colour" : "Finish";
+  const swatchLabel =
+    selectedAsset?.category === "Bathtubs" ? "Tub colour" : "Finish";
   const showColorToolbar = !!swatches && !!selectedItem;
   const activeSwatch = selectedItem?.color ?? swatches?.[0]?.hex;
-  const activeSwatchName = swatches?.find((c) => c.hex === activeSwatch)?.name ?? "";
+  const activeSwatchName =
+    swatches?.find((c) => c.hex === activeSwatch)?.name ?? "";
 
   return (
     <main className="app-shell">
@@ -2177,7 +2278,9 @@ function App() {
               className="collapse-button"
               type="button"
               onClick={() => setSidebarOpen((open) => !open)}
-              aria-label={sidebarOpen ? "Collapse asset library" : "Open asset library"}
+              aria-label={
+                sidebarOpen ? "Collapse asset library" : "Open asset library"
+              }
             >
               <ChevronDown size={18} />
             </button>
@@ -2190,7 +2293,10 @@ function App() {
                   <div className="category-header">
                     <span className="category-name">{cat}</span>
                     <small className="category-count">
-                      {cat === "Wall tiles" ? wallTiles.length : assets.filter((a) => a.category === cat).length} items
+                      {cat === "Wall tiles"
+                        ? wallTiles.length
+                        : assets.filter((a) => a.category === cat).length}{" "}
+                      items
                     </small>
                   </div>
 
@@ -2205,9 +2311,17 @@ function App() {
                               className={`asset-card ${wallTile === tile.id ? "selected" : ""}`}
                               onClick={() => applyWallTile(tile)}
                             >
-                              <span className="asset-visual" style={{ background: tile.preview, color: tile.iconColor }}>
+                              <span
+                                className="asset-visual"
+                                style={{
+                                  background: tile.preview,
+                                  color: tile.iconColor,
+                                }}
+                              >
                                 <Icon size={46} strokeWidth={1.3} />
-                                <span className="add-mark">{wallTile === tile.id ? "✓" : "+"}</span>
+                                <span className="add-mark">
+                                  {wallTile === tile.id ? "✓" : "+"}
+                                </span>
                               </span>
                               <strong>{tile.name}</strong>
                               <small>{tile.detail}</small>
@@ -2218,7 +2332,9 @@ function App() {
                           .filter((a) => a.category === cat)
                           .map((asset) => {
                             const Icon = asset.icon;
-                            const isPlaced = placedItems.some((item) => item.type === asset.id);
+                            const isPlaced = placedItems.some(
+                              (item) => item.type === asset.id,
+                            );
                             return (
                               <button
                                 key={asset.id}
@@ -2228,7 +2344,9 @@ function App() {
                               >
                                 <span className={`asset-visual ${asset.tone}`}>
                                   <Icon size={46} strokeWidth={1.3} />
-                                  <span className="add-mark">{isPlaced ? "✓" : "+"}</span>
+                                  <span className="add-mark">
+                                    {isPlaced ? "✓" : "+"}
+                                  </span>
                                 </span>
                                 <strong>{asset.name}</strong>
                                 <small>{asset.detail}</small>
@@ -2268,15 +2386,29 @@ function App() {
                 <X size={17} />
                 <span>Remove</span>
               </button>
-              <button type="button" onClick={removeLast} disabled={!placedItems.length} title="Undo last item">
+              <button
+                type="button"
+                onClick={removeLast}
+                disabled={!placedItems.length}
+                title="Undo last item"
+              >
                 <Undo2 size={17} />
                 <span>Undo</span>
               </button>
-              <button type="button" onClick={clearRoom} disabled={!placedItems.length} title="Clear room">
+              <button
+                type="button"
+                onClick={clearRoom}
+                disabled={!placedItems.length}
+                title="Clear room"
+              >
                 <Trash2 size={17} />
                 <span>Clear</span>
               </button>
-              <button type="button" onClick={() => resetCameraRef.current()} title="Reset camera">
+              <button
+                type="button"
+                onClick={() => resetCameraRef.current()}
+                title="Reset camera"
+              >
                 <RotateCcw size={17} />
                 <span>Reset view</span>
               </button>
@@ -2309,7 +2441,10 @@ function App() {
               <Rotate3D size={17} />
               <span>Drag to orbit</span>
               <i />
-              <span>Drag a piece to move (wall pieces slide up and down too), green dot to rotate tubs</span>
+              <span>
+                Drag a piece to move (wall pieces slide up and down too);
+                bathtubs are fixed in place
+              </span>
               <i />
               <span>Click empty space to deselect</span>
             </div>
@@ -2357,14 +2492,18 @@ function App() {
                         borderRadius: "50%",
                         background: toCss(color.hex),
                         border: "1px solid rgba(0,0,0,0.18)",
-                        boxShadow: active ? "0 0 0 2px #fff, 0 0 0 4px #2f6f5e" : "none",
+                        boxShadow: active
+                          ? "0 0 0 2px #fff, 0 0 0 4px #2f6f5e"
+                          : "none",
                         cursor: "pointer",
                         padding: 0,
                       }}
                     />
                   );
                 })}
-                <small style={{ minWidth: 86, opacity: 0.7 }}>{activeSwatchName}</small>
+                <small style={{ minWidth: 86, opacity: 0.7 }}>
+                  {activeSwatchName}
+                </small>
               </div>
             )}
             {toast && <div className="toast">{toast}</div>}
