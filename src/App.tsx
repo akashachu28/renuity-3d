@@ -2525,7 +2525,7 @@ function App() {
               <p>
                 <small>Current selection</small>
                 <strong>{selectedAsset?.name ?? "No item selected"}</strong>
-              </p>
+              </p> 
             </div>
             <button type="button">
               Continue to review
