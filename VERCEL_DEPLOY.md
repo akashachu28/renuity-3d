@@ -1,69 +1,90 @@
 # Vercel Deployment Fix for Wall Images
 
 ## Problem
-Wall images (wall1.jpg - wall12.jpg) were not showing up after deployment to Vercel because they are stored in Git LFS (Large File Storage), and Vercel doesn't pull LFS files by default.
+Wall images (wall1.jpg - wall12.jpg) are stored in Git LFS and Vercel doesn't automatically pull LFS files during deployment.
 
-## Solution Applied
+## ✅ IMMEDIATE FIX - Do This in Vercel Dashboard
 
-### 1. Created `.lfsconfig`
-This file tells Git LFS which files to fetch specifically.
+### Step 1: Go to Vercel Project Settings
+1. Open your project on Vercel
+2. Go to **Settings** tab
+3. Navigate to **Git** section
 
-### 2. Updated `vercel.json`
-Added `buildCommand` to pull LFS files before building:
-```json
-"buildCommand": "git lfs pull && npm run build"
-```
+### Step 2: Enable Git LFS
+Look for **"Git LFS"** setting and **enable** it.
 
-### 3. Added CORS Headers
-Configured proper headers for asset files to ensure they load correctly from any origin.
+If you don't see this option, continue to Step 3.
 
-## Vercel Dashboard Configuration
+### Step 3: Override Build Command
+1. Go to **Settings → General**
+2. Scroll to **Build & Development Settings**
+3. **Override** the Build Command with:
+   ```
+   bash build.sh
+   ```
+4. Click **Save**
 
-If the buildCommand in vercel.json doesn't work, you need to configure Vercel manually:
+### Step 4: Redeploy
+1. Go to **Deployments** tab
+2. Click on the latest deployment
+3. Click the **three dots menu** (•••)
+4. Select **Redeploy**
 
-1. Go to your project settings on Vercel Dashboard
-2. Navigate to **Settings → Git → Git LFS**
-3. Enable **"Enable Git LFS"**
+## Files in This Repo
 
-OR
+### `build.sh`
+Custom build script that:
+1. Installs Git LFS
+2. Pulls LFS files (including wall images)
+3. Runs the normal build
 
-4. Go to **Settings → General → Build & Development Settings**
-5. Override the build command with: `git lfs pull && npm run build`
+### `vercel.json`
+Configured to:
+- Use the custom build script
+- Add CORS headers for assets
+- Set proper cache control
 
-## Alternative Solution (If LFS Still Doesn't Work)
+### `.lfsconfig`
+Tells Git LFS which files to fetch.
 
-If Vercel continues to have issues with LFS, you can untrack these images from LFS:
+## Alternative: Remove LFS (If All Else Fails)
+
+If Vercel continues to have issues with LFS:
 
 ```bash
-# Remove images from LFS
+# Untrack images from LFS
 git lfs untrack "src/assets/wall*.jpg"
 
-# Remove from .gitattributes
-# (Edit .gitattributes to remove the *.jpg line)
+# Update .gitattributes to remove *.jpg line
+# Edit .gitattributes and remove or comment out: *.jpg filter=lfs...
 
 # Convert LFS pointers to actual files
-git lfs migrate export --include="src/assets/wall*.jpg"
+git lfs migrate export --include="src/assets/wall*.jpg" --everything
 
 # Commit the changes
-git add .
-git commit -m "Convert wall images from LFS to regular Git"
-git push
+git add .gitattributes src/assets/
+git commit -m "Remove wall images from LFS"
+git push --force
 ```
 
 ## Testing
 
-After deploying:
-1. Open browser console (F12)
-2. Select a wall tile from the "Wall tiles" category
-3. Check console logs:
-   - Should see: "Loading texture: [name] URL: [url]"
-   - Should see: "✓ Loaded: [name]"
-   - If error: "✗ Failed to load: [name]" with error details
+After deployment:
+1. Open your deployed site
+2. Press F12 to open browser console
+3. Click "Wall tiles" category
+4. Select any wall tile
+5. Check console for:
+   - ✓ "Loading texture: [name] URL: [url]"
+   - ✓ "✓ Loaded: [name]"
+6. The wall texture should appear on the 3D model
 
-## Files Modified
+## Troubleshooting
 
-- `vercel.json` - Added buildCommand and CORS headers
-- `.lfsconfig` - Configured LFS to fetch wall images
-- `vite.config.ts` - Added assetsInlineLimit: 0 to ensure images are emitted as files
-- `src/vite-env.d.ts` - Added image module declarations
-- `src/App.tsx` - Added error handling and console logging for texture loading
+### Still not working?
+1. Check Vercel build logs for LFS errors
+2. Verify build.sh was executed (should see "Installing Git LFS..." in logs)
+3. Try the "Remove LFS" alternative above
+
+### Can't find Git LFS setting in Vercel?
+Some Vercel plans don't show this setting. Use the "Override Build Command" method instead.
