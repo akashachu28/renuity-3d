@@ -1893,6 +1893,10 @@ function RoomCanvas({
       : undefined;
     marble.visible = !design;
 
+    if (design) {
+      console.log('Loading wall texture:', design.name, 'from URL:', design.url);
+    }
+
     let cancelled = false;
     const loader = new THREE.TextureLoader();
 
@@ -1903,20 +1907,27 @@ function RoomCanvas({
       const mat = mesh.material as THREE.MeshStandardMaterial;
       mat.roughness = design.roughness;
 
-      loader.load(design.url, (texture) => {
-        if (cancelled) {
-          texture.dispose();
-          return;
+      loader.load(
+        design.url,
+        (texture) => {
+          if (cancelled) {
+            texture.dispose();
+            return;
+          }
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.RepeatWrapping;
+          texture.anisotropy = 8;
+          texture.repeat.set(width / design.world[0], height / design.world[1]);
+          mat.map = texture;
+          mat.needsUpdate = true;
+          tileTexturesRef.current.push(texture);
+        },
+        undefined,
+        (error) => {
+          console.error(`Failed to load wall texture: ${design.url}`, error);
         }
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.wrapS = THREE.RepeatWrapping;
-        texture.wrapT = THREE.RepeatWrapping;
-        texture.anisotropy = 8;
-        texture.repeat.set(width / design.world[0], height / design.world[1]);
-        mat.map = texture;
-        mat.needsUpdate = true;
-        tileTexturesRef.current.push(texture);
-      });
+      );
     });
 
     return () => {
