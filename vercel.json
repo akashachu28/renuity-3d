@@ -4,7 +4,9 @@
       "main": true
     }
   },
-  "buildCommand": "git lfs pull && npm run build",
+  "buildCommand": "bash build.sh",
+  "outputDirectory": "dist",
+  "framework": "vite",
   "headers": [
     {
       "source": "/assets/(.*)",
