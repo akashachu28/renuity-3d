@@ -17,6 +17,11 @@ export default defineConfig(({ mode }) => {
       sourcemap: emitSourcemaps ? 'inline' : false,
       minify: !emitSourcemaps,
       assetsInlineLimit: 0, // Don't inline assets, always emit them as files
+      rollupOptions: {
+        output: {
+          assetFileNames: 'assets/[name]-[hash][extname]'
+        }
+      }
     },
     assetsInclude: ['**/*.jpg', '**/*.jpeg', '**/*.png', '**/*.webp'],
     plugins: [
