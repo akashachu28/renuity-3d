@@ -1,12 +1,4 @@
 {
-  "git": {
-    "deploymentEnabled": {
-      "main": true
-    }
-  },
-  "buildCommand": "bash build.sh",
-  "outputDirectory": "dist",
-  "framework": "vite",
   "headers": [
     {
       "source": "/assets/(.*)",
