@@ -3,9 +3,11 @@
 
 # ---------------------------------------------------------------------------
 # Images & Graphics
+# ---------------------------------------------------------------------------
+# NOTE: src/assets/wall*.jpg are excluded from LFS for Vercel deployment compatibility
 *.png                filter=lfs diff=lfs merge=lfs -text
-*.jpg                filter=lfs diff=lfs merge=lfs -text
-*.jpeg               filter=lfs diff=lfs merge=lfs -text
+# *.jpg              filter=lfs diff=lfs merge=lfs -text  # DISABLED for wall images
+# *.jpeg             filter=lfs diff=lfs merge=lfs -text  # DISABLED for wall images
 *.gif                filter=lfs diff=lfs merge=lfs -text
 *.bmp                filter=lfs diff=lfs merge=lfs -text
 *.tiff               filter=lfs diff=lfs merge=lfs -text
