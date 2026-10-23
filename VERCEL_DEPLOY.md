@@ -1,90 +1,60 @@
-# Vercel Deployment Fix for Wall Images
+# ✅ FIXED - Wall Images on Vercel
 
-## Problem
-Wall images (wall1.jpg - wall12.jpg) are stored in Git LFS and Vercel doesn't automatically pull LFS files during deployment.
+## Problem (SOLVED)
+Wall images were stored in Git LFS, which Vercel couldn't access properly.
 
-## ✅ IMMEDIATE FIX - Do This in Vercel Dashboard
+## Solution Applied
+The wall images (wall1.jpg - wall12.jpg) have been **removed from Git LFS** and are now committed as regular files in the repository. This means:
 
-### Step 1: Go to Vercel Project Settings
-1. Open your project on Vercel
-2. Go to **Settings** tab
-3. Navigate to **Git** section
+✅ Images are now stored directly in Git (not as LFS pointers)  
+✅ Vercel can build and deploy them without any LFS configuration  
+✅ No special build commands or settings needed  
 
-### Step 2: Enable Git LFS
-Look for **"Git LFS"** setting and **enable** it.
+## What Was Done
 
-If you don't see this option, continue to Step 3.
-
-### Step 3: Override Build Command
-1. Go to **Settings → General**
-2. Scroll to **Build & Development Settings**
-3. **Override** the Build Command with:
+1. **Migrated images out of LFS**
+   ```bash
+   git lfs migrate export --include="src/assets/wall*.jpg" --everything
    ```
-   bash build.sh
-   ```
-4. Click **Save**
 
-### Step 4: Redeploy
-1. Go to **Deployments** tab
-2. Click on the latest deployment
-3. Click the **three dots menu** (•••)
-4. Select **Redeploy**
+2. **Updated .gitattributes**
+   - Disabled LFS tracking for .jpg and .jpeg files
+   - Images will stay as regular Git files going forward
 
-## Files in This Repo
-
-### `build.sh`
-Custom build script that:
-1. Installs Git LFS
-2. Pulls LFS files (including wall images)
-3. Runs the normal build
-
-### `vercel.json`
-Configured to:
-- Use the custom build script
-- Add CORS headers for assets
-- Set proper cache control
-
-### `.lfsconfig`
-Tells Git LFS which files to fetch.
-
-## Alternative: Remove LFS (If All Else Fails)
-
-If Vercel continues to have issues with LFS:
-
-```bash
-# Untrack images from LFS
-git lfs untrack "src/assets/wall*.jpg"
-
-# Update .gitattributes to remove *.jpg line
-# Edit .gitattributes and remove or comment out: *.jpg filter=lfs...
-
-# Convert LFS pointers to actual files
-git lfs migrate export --include="src/assets/wall*.jpg" --everything
-
-# Commit the changes
-git add .gitattributes src/assets/
-git commit -m "Remove wall images from LFS"
-git push --force
-```
+3. **Cleaned up**
+   - Removed build.sh and .lfsconfig (no longer needed)
+   - Simplified vercel.json (just CORS headers)
 
 ## Testing
 
-After deployment:
+After the next Vercel deployment:
 1. Open your deployed site
 2. Press F12 to open browser console
 3. Click "Wall tiles" category
 4. Select any wall tile
-5. Check console for:
+5. You should see:
    - ✓ "Loading texture: [name] URL: [url]"
    - ✓ "✓ Loaded: [name]"
-6. The wall texture should appear on the 3D model
+6. The wall texture should appear on the 3D bathroom model
 
-## Troubleshooting
+## File Sizes
 
-### Still not working?
-1. Check Vercel build logs for LFS errors
-2. Verify build.sh was executed (should see "Installing Git LFS..." in logs)
-3. Try the "Remove LFS" alternative above
+The wall images are now regular files:
+- wall1.jpg: 19 KB
+- wall2.jpg: 13 KB
+- wall3.jpg: 41 KB
+- wall4.jpg: 48 KB
+- wall5.jpg: 107 KB
+- wall6.jpg: 11 KB
+- wall7.jpg: 106 KB
+- wall8.jpg: 248 KB
+- wall9.jpg: 33 KB
+- wall10.jpg: 34 KB
+- wall11.jpg: 53 KB
+- wall12.jpg: 20 KB
 
-### Can't find Git LFS setting in Vercel?
-Some Vercel plans don't show this setting. Use the "Override Build Command" method instead.
+Total: ~733 KB (acceptable for direct Git storage)
+
+## No Action Required
+
+The fix is complete. Vercel will automatically deploy the changes on the next push.
